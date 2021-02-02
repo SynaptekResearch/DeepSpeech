@@ -1,73 +1,48 @@
 ###
-### From topdir, first use multistrap to prepare a raspbian jessie armhf root
-### $ sudo multistrap -d multistrap-raspbian-jessie -f native_client/multistrap.conf
+### From topdir, first use multistrap to prepare a raspbian buster armhf root
+### $ multistrap -d multistrap-raspbian-buster -f native_client/multistrap_raspbian_buster.conf
 ###
 ### You can make a tarball after:
-### $ touch multistrap-raspbian-jessie.tar && sudo tar cf multistrap-raspbian-jessie.tar multistrap-raspbian-jessie/ && xz multistrap-raspbian-jessie.tar
+### $ touch multistrap-raspbian-buster.tar && sudo tar cf multistrap-raspbian-buster.tar multistrap-raspbian-buster/ && xz multistrap-raspbian-buster.tar
 ###
 ### Then cross-build:
 ### $ make -C native_client/ TARGET=rpi3 TFDIR=../../tensorflow/tensorflow/
 ###
 
-.PHONY: clean run bindings
+.PHONY: clean run print-toolchain
 
-TARGET ?= host
-TFDIR  ?= ../../tensorflow
-CXX    ?= c++
-PREFIX ?= /usr/local
+include definitions.mk
 
-ifeq ($(TARGET),host)
-TOOLCHAIN :=
-CFLAGS    := `pkg-config --cflags sox`
-LDFLAGS   := `pkg-config --libs sox`
-endif
-
-ifeq ($(TARGET),rpi3)
-TOOLCHAIN   ?= ${TFDIR}/bazel-$(shell basename "${TFDIR}")/external/GccArmRpi/arm-bcm2708/arm-rpi-4.9.3-linux-gnueabihf/bin/arm-linux-gnueabihf-
-RASPBIAN    ?= ../multistrap-raspbian-jessie
-CFLAGS      := -isystem $(RASPBIAN)/usr/include -L$(RASPBIAN)/lib/arm-linux-gnueabihf/ -L$(RASPBIAN)/usr/lib/arm-linux-gnueabihf/
-LDFLAGS     := -Wl,-rpath-link,$(RASPBIAN)/lib/arm-linux-gnueabihf -Wl,-rpath-link,$(RASPBIAN)/usr/lib/arm-linux-gnueabihf/ -lsox
-endif
-
-OS := $(shell uname -s)
-CFLAGS  += -L${TFDIR}/bazel-bin/tensorflow -L${TFDIR}/bazel-bin/native_client $(EXTRA_CFLAGS)
-LDFLAGS += -ltensorflow_cc -ldeepspeech -ldeepspeech_utils $(EXTRA_LDFLAGS)
-
-META_LD_LIBRARY_PATH := LD_LIBRARY_PATH
-ifeq ($(OS),Darwin)
-META_LD_LIBRARY_PATH := DYLD_LIBRARY_PATH
-endif
-
-default: deepspeech
+default: $(DEEPSPEECH_BIN)
 
 clean:
-	rm -rf build dist deepspeech.egg-info
-	rm -f deepspeech python/model_wrap.cpp python/utils_wrap.cpp python/model.py python/utils.py
+	rm -f deepspeech
 
-deepspeech: client.cc
-	$(TOOLCHAIN)$(CXX) -o deepspeech $(CFLAGS) client.cc $(LDFLAGS)
+$(DEEPSPEECH_BIN): client.cc Makefile
+	$(CXX) $(CFLAGS) $(CFLAGS_DEEPSPEECH) $(SOX_CFLAGS) client.cc $(LDFLAGS) $(SOX_LDFLAGS)
+ifeq ($(OS),Darwin)
+	install_name_tool -change bazel-out/local-opt/bin/native_client/libdeepspeech.so @rpath/libdeepspeech.so deepspeech
+endif
 
-bindings:
-	python ./setup.py bdist_wheel
+run: $(DEEPSPEECH_BIN)
+	${META_LD_LIBRARY_PATH}=${TFDIR}/bazel-bin/native_client:${${META_LD_LIBRARY_PATH}} ./deepspeech ${ARGS}
 
-run: deepspeech
-	${META_LD_LIBRARY_PATH}=${TFDIR}/bazel-bin/tensorflow:${TFDIR}/bazel-bin/native_client:${${META_LD_LIBRARY_PATH}} ./deepspeech ${ARGS}
+debug: $(DEEPSPEECH_BIN)
+	${META_LD_LIBRARY_PATH}=${TFDIR}/bazel-bin/native_client:${${META_LD_LIBRARY_PATH}} gdb --args ./deepspeech ${ARGS}
 
-debug: deepspeech
-	${META_LD_LIBRARY_PATH}=${TFDIR}/bazel-bin/tensorflow:${TFDIR}/bazel-bin/native_client:${${META_LD_LIBRARY_PATH}} gdb --args ./deepspeech ${ARGS}
-
-install: deepspeech
+install: $(DEEPSPEECH_BIN)
 	install -d ${PREFIX}/lib
-	install -m 0644 ${TFDIR}/bazel-bin/tensorflow/libtensorflow_cc.so ${PREFIX}/lib/
 	install -m 0644 ${TFDIR}/bazel-bin/native_client/libdeepspeech.so ${PREFIX}/lib/
-	install -m 0644 ${TFDIR}/bazel-bin/native_client/libdeepspeech_utils.so ${PREFIX}/lib/
+	install -d ${PREFIX}/include
+	install -m 0644 deepspeech.h ${PREFIX}/include
 	install -d ${PREFIX}/bin
 	install -m 0755 deepspeech ${PREFIX}/bin/
 
 uninstall:
 	rm -f ${PREFIX}/bin/deepspeech
 	rmdir --ignore-fail-on-non-empty ${PREFIX}/bin
-	rm -f ${PREFIX}/lib/libdeepspeech_utils.so
 	rm -f ${PREFIX}/lib/libdeepspeech.so
-	rm -f ${PREFIX}/lib/libtensorflow_cc.so
 	rmdir --ignore-fail-on-non-empty ${PREFIX}/lib
+
+print-toolchain:
+	@echo $(TOOLCHAIN)
